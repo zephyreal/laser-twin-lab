@@ -1,0 +1,11 @@
+import test from 'node:test';import assert from 'node:assert/strict';import{initial,transition,grade}from'../twin/rules.mjs';
+function act(s,kind,t=10000,extra={}){return transition(s,{kind,...extra},t)}
+function ready(){let s=initial();for(let k of ['power','coolant','gas','clamp','door','home']){let r=act(s,k);assert.equal(r.error,'');s=r.state}s=act(s,'parameters',10000,{p:1500,v:25}).state;s=act(s,'laser').state;return s}
+test('interlocks reject unprepared laser activation',()=>{const r=act(initial(),'laser');assert.ok(r.error);assert.equal(r.state.laser,false);assert.equal(r.state.errors,1)});
+test('complete workflow earns 100 and preserves input state',()=>{let s=ready(),prev=structuredClone(s);s=act(s,'weld').state;assert.deepEqual(prev,ready());s=act(s,'finish',18000).state;for(let k of ['laserOff','gasOff','coolantOff','powerOff'])s=act(s,k,19000).state;assert.equal(grade(s).total,100)});
+test('finish requires authoritative eight second duration',()=>{let s=act(ready(),'weld').state;let r=act(s,'finish',11000);assert.ok(r.error);assert.equal(r.state.welded,false)});
+test('reject non-finite and out-of-range input',()=>{let s=ready();s=act(s,'laserOff').state;for(let p of [NaN,Infinity,-1,2401,'1500'])assert.ok(act(s,'parameters',10000,{p,v:25}).error)});
+test('emergency stops output and does not award welding completion',()=>{let s=act(ready(),'weld').state;s=act(s,'emergency').state;assert.equal(s.laser,false);assert.equal(s.running,false);assert.equal(s.welded,false);assert.ok(act(s,'weld').error);s=act(s,'reset').state;assert.equal(s.emergency,false);assert.equal(s.laser,false)});
+test('cannot inflate parameter score after welding',()=>{let s=ready();s=act(s,'laserOff').state;s=act(s,'parameters',10000,{p:900,v:30}).state;s=act(s,'laser').state;s=act(s,'weld').state;s=act(s,'finish',18000).state;s=act(s,'laserOff').state;assert.ok(act(s,'parameters',19000,{p:1500,v:25}).error);assert.equal(grade(s).breakdown[1].score,10)});
+test('completed submissions are immutable and empty task earns zero',()=>{assert.equal(grade(initial()).total,0);let s={...ready(),done:true};assert.deepEqual(act(s,'power').state,s)});
+test('unsafe stop rejected and penalized',()=>{let s=act(ready(),'weld').state;let r=act(s,'coolantOff');assert.ok(r.error);assert.equal(r.state.coolant,true);assert.equal(grade(r.state).breakdown[4].score,8)});
